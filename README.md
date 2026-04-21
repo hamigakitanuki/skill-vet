@@ -1,46 +1,59 @@
-# weapon-shop-skills
+# skill-vet
 
-武器屋（my-weapon-shop）から切り出した **Agent Skills** の配布リポジトリ。
-`gh skill install` 互換フォーマットで公開しています。
+未信頼の **Agent Skill** を導入する前に、静的スキャンで危険度を判定する監査スキル。
+Claude Code / GitHub Copilot / Cursor / Codex / Gemini CLI いずれにもインストール可能。
 
-## 収録スキル
+> Installing a skill grants the attacker write access to your prompt and (often) your shell.
+> Treat every unverified skill like an npm package you found in a DM — look before you execute.
 
-| スキル | 目的 |
+## 何を検出するか
+
+| 層 | 検出内容 |
 |---|---|
-| [`skill-vet`](skills/skill-vet/SKILL.md) | 未信頼 Agent Skill の安全性レビュー。`SKILL.md` / `scripts/` / GitHubリポ情報を静的スキャンし、プロンプトインジェクション・認証情報流出・リバースシェル・怪しい作者を検出します。 |
+| **SKILL.md 本文** | プロンプトインジェクション（DAN/jailbreak/ignore previous...）、ゼロ幅文字、偽の会話タグ、日本語版インジェクション |
+| **認証情報・シェル系** | `~/.ssh` / `~/.aws` / `.env` 参照、`curl ... \| bash`、`bash -i`、netcat リバースシェル |
+| **データ流出** | Slack / Discord / Make / webhook.site など外向き webhook、`fetch` / `axios` / `requests` による外部送信 |
+| **動的実行** | `eval` / `exec` / `pickle.loads` / Node `child_process shell:true` / PowerShell `IEX` |
+| **scripts/ 配下** | 上記パターンを各スクリプト本文に再適用。指示系スキルなのに `scripts/` があれば警戒度UP |
+| **リポジトリ権威** | stars / 最終更新 / ライセンス / archived / 作者 followers・公開リポ数 |
+| **ドキュメント言語** | 中国語ドキュメントの疑い（漢字支配・かな文字ほぼゼロ）を自動検出 |
+
+判定は **BLOCK / DANGER / WARN / NOTICE / SAFE** の5段階。CRITICAL が2件以上なら即 BLOCK。
 
 ## インストール
 
 ### Claude Code
 
 ```bash
-gh skill install hamigakitanuki/weapon-shop-skills skill-vet --agent claude-code --scope user
+gh skill install hamigakitanuki/skill-vet skill-vet --agent claude-code --scope user
 ```
 
 ### GitHub Copilot / Cursor / Codex / Gemini CLI
 
 ```bash
-gh skill install hamigakitanuki/weapon-shop-skills skill-vet --agent <agent> --scope user
+gh skill install hamigakitanuki/skill-vet skill-vet --agent <agent> --scope user
 ```
 
-`--scope project` にすれば現在の git リポジトリにのみインストールされます。
+`--scope project` で現在の git リポジトリのみに配置。
 
-## 使い方（skill-vet の例）
+## 使い方
 
-インストール後、エージェントに対象スキルを渡すと `skill-vet` が発動します。
+インストール後、対象スキルをエージェントに渡すと発動します。
 
 ```
 skill-vet で anthropic/claude-skills を評価して
-skill-vet github/awesome-copilot/skills/monalisa/code-review を審査
+skill-vet を使って github/awesome-copilot/skills/monalisa/code-review を審査
+skill-vet https://github.com/someone/suspicious-skill
 ```
 
-エージェントが `SKILL.md` と `scripts/` を取得し、CRITICAL / WARNING パターンを順にスキャンして
+エージェントが `SKILL.md` と `scripts/` を `gh api` で取得 → 正規表現パターンで静的スキャン →
 `BLOCK / DANGER / WARN / NOTICE / SAFE` の5段階で判定を返します。
 
 ## 由来
 
-- 武器屋の `skill_vet` スキル（TypeScript実装）から検出ルールを抽出し、LLM実行可能な Markdown 手順に翻訳したもの。
-- 元実装: [my-weapon-shop](https://github.com/hamigakitanuki/my-weapon-shop) の `src/skills/skill_vet.ts`
+武器屋（[my-weapon-shop](https://github.com/hamigakitanuki/my-weapon-shop)）の
+`src/skills/skill_vet.ts`（TypeScript実装）から検出ルールを抽出し、
+LLM が実行可能な Markdown 手順書に翻訳したもの。
 
 ## ライセンス
 
