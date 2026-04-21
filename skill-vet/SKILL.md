@@ -1,6 +1,6 @@
 ---
 name: skill-vet
-description: Use when evaluating an untrusted agent skill before installing or adopting it — scans SKILL.md, bundled scripts, and repository metadata for prompt injection, credential exfiltration, reverse shells, malicious dynamic execution, and suspicious authorship.
+description: Use when evaluating an untrusted agent skill before installing or adopting it — especially when the author is unknown or unverified. Scans SKILL.md, bundled scripts, and repository metadata for prompt injection, credential exfiltration, reverse shells, and malicious dynamic execution; cross-checks author identity on GitHub / HackerNews / Stack Overflow / dev.to / npm / Keybase.
 license: MIT
 ---
 
@@ -39,10 +39,11 @@ Steps:
 5. **Fetch & scan siblings**: `references/*.md` and `scripts/*` in the same directory
 6. **Check repository authority** (stars, age, license, owner followers, archived, last push)
 7. **Check dependency surface** (presence of `scripts/`, `.sh` at root, `package.json` / `requirements.txt` / `pyproject.toml` / `Gemfile` / `go.mod`)
-8. **Compute verdict** (see *Verdict Rules*)
-9. **Report** findings with `severity`, `label`, `detail`, plus the verdict
+8. **Investigate the person behind the skill** (see *Person Background Investigation*) — the most load-bearing signal for judging trust
+9. **Compute verdict** (see *Verdict Rules*)
+10. **Report** findings with `severity`, `label`, `detail`, plus the verdict AND a `[Person Dossier]` block AND an explicit Human Review decision
 
-Use `Read` for file contents and `Grep` for pattern matching. For repo metadata, use `gh api repos/OWNER/REPO` and `gh api users/OWNER`.
+Use `Read` for file contents and `Grep` for pattern matching. For repo metadata, use `gh api repos/OWNER/REPO` and `gh api users/OWNER`. For external identity lookups, use `curl -m 8` against the public APIs listed in *Person Background Investigation*.
 
 ## Detection Patterns
 
@@ -134,6 +135,58 @@ Additionally:
 
 - `INSTRUCTION_SKILL_HAS_SCRIPTS` — **WARNING** — If the skill classifies as `instruction` (see next section) yet ships executable files in `scripts/`, flag it. Instruction-style skills rarely need compiled logic; scripts there deserve extra scrutiny.
 
+## Person Background Investigation
+
+A suspicious-looking SKILL.md from a known, well-networked author deserves very different treatment from a clean SKILL.md from an account created last week with zero external presence. **Who wrote this** is the single most load-bearing trust signal. Always collect and report a person dossier.
+
+### Collection steps (individual user)
+
+Run these in parallel where possible. All endpoints are unauthenticated. Cap each call at 8s (`curl -m 8`).
+
+| Source | Command | What you extract |
+|---|---|---|
+| GitHub profile | `gh api users/OWNER` | `type` (User/Organization), `name`, `bio`, `blog`, `company`, `twitter_username`, `email`, `location`, `hireable`, `followers`, `public_repos`, `created_at` |
+| Orgs | `gh api users/OWNER/orgs` | Array of `login` |
+| Recent activity | `gh api 'users/OWNER/events/public?per_page=30'` | Count `PushEvent`s, unique `repo.name`s |
+| Blog scrape | `curl -sL -m 8 BLOG_URL` | `<title>`, `<meta name="description">`, first `<h1>` (first 300 chars each) |
+| HackerNews | `curl -sL -m 8 https://hacker-news.firebaseio.com/v0/user/OWNER.json` | `karma`, `created` (unix → year), `about`, `submitted.length` |
+| Stack Overflow | `curl -sL -m 8 'https://api.stackexchange.com/2.3/users?inname=DISPLAY_NAME&site=stackoverflow'` | `items[0].reputation`, `items[0].badge_counts`, `items[0].link` |
+| dev.to | `curl -sL -m 8 https://dev.to/api/users/by_username?url=OWNER` | `name`, `summary`, `joined_at`, `twitter_username`, `github_username` |
+| npm | `curl -sL -m 8 'https://registry.npmjs.org/-/v1/search?text=maintainer:OWNER&size=20'` | `total` (package count), last 5 package names |
+| Keybase | `curl -sL -m 8 'https://keybase.io/_/api/1.0/user/lookup.json?github=OWNER&fields=profile,proofs_summary,public_keys'` | verified proofs list, PGP fingerprint, full name |
+
+If `type == "Organization"`, skip HN/SO/dev.to/npm/Keybase. Check Org-level fields (`description`, `blog`, `public_repos`, `created_at`) instead.
+
+### Person findings
+
+| Label | Severity | Condition |
+|---|---|---|
+| `BLOG_UNREACHABLE` | INFO | `blog` set but `curl` fails or returns non-2xx |
+| `NO_BIO` | INFO | User with empty `bio` |
+| `NO_EXTERNAL_PRESENCE` | WARNING | User with neither `blog` nor `twitter_username` |
+| `NO_ORGS` | INFO | User with zero organizations |
+| `DORMANT` | INFO | Zero `PushEvent`s in last 30 public events |
+| `NO_ORG_DESC` | INFO | Organization with empty `description` |
+| `NO_ORG_SITE` | INFO | Organization with empty `blog` |
+| `NO_EXTERNAL_ID` | WARNING | User not found on **any** of HN / SO / dev.to / npm / Keybase |
+| `MULTI_PLATFORM` | INFO | User found on ≥ 3 of those platforms |
+| `KEYBASE_VERIFIED` | INFO | Keybase returns ≥ 1 cryptographically-verified external ID |
+
+Person findings contribute to the verdict via the standard WARNING / INFO rules — there is no separate weighting.
+
+### Follow-up links for the human reviewer
+
+Always emit these in the dossier so the human can double-check:
+
+```
+Google     : https://www.google.com/search?q=%22<NAME>%22+github
+LinkedIn   : https://www.google.com/search?q=site%3Alinkedin.com%2Fin+%22<NAME>%22
+Twitter/X  : https://x.com/<twitter_username>   (if set)
+GitHub     : https://github.com/<OWNER>
+```
+
+URL-encode the name. These are *suggestions for the reviewer*, not automated checks — skill-vet cannot authenticate identity at this depth, only surface the leads.
+
 ## Skill Type Classification
 
 Parse `description:` from the frontmatter (fallback: first 800 chars of body), then:
@@ -166,7 +219,7 @@ INFO findings are reported but do not affect the verdict.
 
 ## Reporting Format
 
-Group findings by layer, then list: `severity | label | detail`. End with the verdict and, if WARN or worse, an explicit recommendation.
+Group findings by layer, then list: `severity | label | detail`. The report **must** contain a `[Person Dossier]` section and a final `🔍 Human Review Required` decision — even when the verdict is SAFE.
 
 ```
 [Repository]
@@ -180,13 +233,55 @@ Group findings by layer, then list: `severity | label | detail`. End with the ve
 [scripts/install.sh]
   CRITICAL | SCRIPT_REVERSE_SHELL | netcat リバースシェル疑い
 
+[Person Dossier]
+  Type        : User
+  Name        : Taro Yamada
+  Bio         : Indie hacker, ex-Google
+  Blog        : https://example.com (title: "Taro's playground")
+  Company     : @acme-inc
+  Twitter     : @tarochan
+  Location    : Tokyo, JP
+  Orgs        : acme-inc, oss-japan
+  Activity    : 24 pushes across 5 repos in last 30 events
+  HackerNews  : karma 2340, since 2015
+  StackOverflow: rep 18500, 42 badges
+  dev.to      : joined 2019-04, twitter @tarochan
+  npm         : 12 packages (acme-cli, acme-sdk, ...)
+  Keybase     : verified twitter, mastodon, PGP fingerprint 0xABCD1234
+
+  Person findings:
+    WARNING | NO_EXTERNAL_PRESENCE | blog / Twitter の外部リンクなし
+    INFO    | MULTI_PLATFORM       | 4サービスで身元確認（信頼度プラス）
+
+  Follow-up links (for human review):
+    - Google   : https://www.google.com/search?q=%22Taro+Yamada%22+github
+    - LinkedIn : https://www.google.com/search?q=site%3Alinkedin.com%2Fin+%22Taro+Yamada%22
+    - Twitter  : https://x.com/tarochan
+    - GitHub   : https://github.com/OWNER
+
 Verdict: BLOCK — 2 CRITICAL findings. Do not install.
+
+🔍 Human Review Required: YES
+  Reason: verdict is BLOCK. Confirm rejection, or investigate the single CRITICAL finding for a false positive.
 ```
+
+### Human Review decision rule
+
+Emit `🔍 Human Review Required: YES` in any of these cases:
+
+1. **Verdict is `BLOCK`, `DANGER`, or `WARN`** — always require human sign-off before action
+2. **Verdict is `NOTICE` or `SAFE`, but any Person-layer finding has severity WARNING** (e.g. `NO_EXTERNAL_PRESENCE`, `NO_EXTERNAL_ID`) — automated checks passed but the author is unverified
+3. **Verdict is `NOTICE` or `SAFE`, but the repo is less than 90 days old OR has < 5 stars OR has no license** — structural red flags that warrant a second pair of eyes
+
+Otherwise emit `🔍 Human Review Required: NO (optional)` — skill-vet found nothing, but final adoption is still a human decision. **Skill-vet recommends, humans approve.**
 
 ## Common Mistakes
 
 - **Only scanning SKILL.md.** `scripts/` and `references/` are where the real payload usually lives — always descend.
+- **Skipping the person dossier.** A clean-looking SKILL.md from `user-created-yesterday` with no external identity is more dangerous than messy code from a known author. Always collect the dossier.
+- **Trusting the GitHub `company` field.** It is free-form text — anyone can put `@google` there. Cross-check against Keybase proofs, the blog's content, and HN/SO account age.
 - **Trusting a high star count.** Stars can be bought or farmed; combine with `owner followers`, `public_repos`, and `created_at`.
+- **Auto-approving SAFE verdicts.** Skill-vet recommends; humans approve. Read the dossier even when the verdict is SAFE.
 - **Ignoring zero-width / HTML-comment payloads.** These don't render in the browser preview. You must scan the raw bytes.
 - **Overweighting structural-only flags.** `NO_FRONTMATTER` + `HAS_SCRIPTS_DIR` alone is NOTICE, not DANGER — reserve escalation for real behavioral patterns.
 - **Treating base64 blobs as evidence of malice.** `BASE64_BLOB` is CRITICAL as a prompt-to-investigate, not as a conviction. Decode before judging.
@@ -202,5 +297,15 @@ gh api repos/OWNER/REPO/contents/skills/NAME/SKILL.md --jq .content | base64 -d
 gh api repos/OWNER/REPO --jq '{stars:.stargazers_count, pushed:.pushed_at, license:.license.spdx_id, archived:.archived}'
 
 # Owner authority snapshot
-gh api users/OWNER --jq '{type:.type, followers, public_repos, created_at}'
+gh api users/OWNER --jq '{type:.type, name, bio, blog, twitter:.twitter_username, company, followers, public_repos, created_at}'
+
+# Recent activity
+gh api 'users/OWNER/events/public?per_page=30' --jq '[.[] | select(.type=="PushEvent")] | {pushes: length, repos: [.[].repo.name] | unique | length}'
+
+# External identity probes (individual users)
+curl -sL -m 8 "https://hacker-news.firebaseio.com/v0/user/OWNER.json"
+curl -sL -m 8 "https://api.stackexchange.com/2.3/users?inname=DISPLAY_NAME&site=stackoverflow"
+curl -sL -m 8 "https://dev.to/api/users/by_username?url=OWNER"
+curl -sL -m 8 "https://registry.npmjs.org/-/v1/search?text=maintainer:OWNER&size=20"
+curl -sL -m 8 "https://keybase.io/_/api/1.0/user/lookup.json?github=OWNER&fields=profile,proofs_summary,public_keys"
 ```

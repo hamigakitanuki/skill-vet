@@ -16,9 +16,14 @@ Claude Code / GitHub Copilot / Cursor / Codex / Gemini CLI いずれにもイン
 | **動的実行** | `eval` / `exec` / `pickle.loads` / Node `child_process shell:true` / PowerShell `IEX` |
 | **scripts/ 配下** | 上記パターンを各スクリプト本文に再適用。指示系スキルなのに `scripts/` があれば警戒度UP |
 | **リポジトリ権威** | stars / 最終更新 / ライセンス / archived / 作者 followers・公開リポ数 |
+| **人物バックボーン** | GitHub profile + blog スクレイプ + 所属Org + 直近活動 + HackerNews / Stack Overflow / dev.to / npm / Keybase 横断での身元確認 |
 | **ドキュメント言語** | 中国語ドキュメントの疑い（漢字支配・かな文字ほぼゼロ）を自動検出 |
 
 判定は **BLOCK / DANGER / WARN / NOTICE / SAFE** の5段階。CRITICAL が2件以上なら即 BLOCK。
+
+### 人間レビュー前提の設計
+
+skill-vet は **推薦するが、採用は人間が決める**。レポートには必ず `[Person Dossier]` セクションと `🔍 Human Review Required` の決定が付き、LinkedIn / Google / Twitter の裏取り検索URLも自動生成されます。verdict が SAFE でも、リポが新しい・人物が未確認などの場合は Human Review を必須化します。
 
 ## インストール
 
